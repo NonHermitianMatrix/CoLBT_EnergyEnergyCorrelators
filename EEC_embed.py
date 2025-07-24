@@ -410,6 +410,18 @@ def energy_energy_correlator_pbpbpp(
         pp_m1_particles = load_spec_particles(hydro_m1_path, jet_eta, jet_phi)
         pp_m2_particles = load_spec_particles(hydro_m2_path, jet_eta, jet_phi)
         all_filtered_particles = {}
+        # List of all DataFrames that must have 'pt' and not be empty
+        required_dfs = [
+            pbpb_signal_particles, hydro_m1_particles, hydro_m2_particles,
+            pbpb_newcon_particles, pbpb_spec_particles,
+            pp_signal_particles, rotated_hadron_particles,
+            pp_m1_particles, pp_m2_particles
+        ]
+        # Check for empty DataFrames or missing 'pt' column
+        if any(df.empty or 'pt' not in df.columns for df in required_dfs):
+            print(f"Skipping event {evt_idx} due to empty DataFrame or missing 'pt' column")
+            continue
+        all_filtered_particles = {}
         for p_ch_T_cut in p_ch_T_cuts:
             all_filtered_particles[p_ch_T_cut] = {
                 'pbpb_signal': pbpb_signal_particles[pbpb_signal_particles["pt"] >= p_ch_T_cut],
@@ -593,4 +605,4 @@ if __name__ == '__main__':
     pp_datapath    = "/home/PP"
     hydro_datapath = "/home/Hydrobackground"
     outfilename    = "/home/EEC_embed.root"
-    energy_energy_correlator_pbpbpp(pbpb_datapath, pp_datapath, hydro_datapath, outfilename, start_file=0, end_file=7999, pp_start=0, pp_end=7999)
+    energy_energy_correlator_pbpbpp(pbpb_datapath, pp_datapath, hydro_datapath, outfilename, start_file=4224, end_file=7999, pp_start=3569, pp_end=7999)
