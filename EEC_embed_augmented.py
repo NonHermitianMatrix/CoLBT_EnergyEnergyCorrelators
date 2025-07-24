@@ -74,10 +74,8 @@ def load_spec_particles(filepath, jet_eta=None, jet_phi=None, cone_radius=MAX_DR
             print(f"dNdEtaPtdPtdPhi_Charged.dat not found in {filepath}")
             return pd.DataFrame()
 
-        # Load and reshape (from code2)
         spec_data = np.loadtxt(event_charged_dat).reshape(NY, NPT, NPHI) / (HBARC**3.0)
 
-        # Bin widths
         eta_width = np.empty_like(Y)
         eta_width[1:-1] = (Y[2:] - Y[:-2]) / 2.0
         eta_width[0] = (Y[1] - Y[0]) / 2.0
@@ -427,6 +425,9 @@ def energy_energy_correlator_pbpbpp(
         hydro_m2_df = load_spec_particles(os.path.join(hydro_datapath, f"event{m2_idx}"), jet_eta, jet_phi, cone_radius=MAX_DR, pt_min=PT_MIN, pt_max=PT_MAX)
 
         rotated_hadron_df = rotate_particles_to_match_axes(pp_hadron_df, pp_jet_eta, pp_jet_phi, jet_eta, jet_phi)
+        if rotated_hadron_df.empty or "pt" not in rotated_hadron_df.columns:
+            print(f"Skipping event {evt_idx}: rotated_hadron_df is empty or missing 'pt' column.")
+            continue
         pp_ue_hydro_df = load_spec_particles(os.path.join(hydro_datapath, f"event{evt_idx % 400}"), jet_eta, jet_phi, cone_radius=MAX_DR, pt_min=PT_MIN, pt_max=PT_MAX)
         pp_signal_df = pd.concat([rotated_hadron_df, pp_ue_hydro_df], ignore_index=True)
 
@@ -627,5 +628,5 @@ if __name__ == '__main__':
     outfilename    = "/home/Energy_energy_correlators_scripts/Ap_comparison_macros/EEC_embed_augmented.root"
     energy_energy_correlator_pbpbpp(
         pbpb_datapath, pp_datapath, hydro_datapath, outfilename, 
-        start_file=0, end_file=1999, pp_start=0, pp_end=4999
+        start_file=0, end_file=7999, pp_start=0, pp_end=7999
     )
