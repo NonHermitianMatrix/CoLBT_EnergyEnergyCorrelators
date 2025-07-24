@@ -161,8 +161,10 @@ def select_equal_particles(df1, df2):
         return df1.copy(), df2.sample(n=n1, random_state=RANDOM_SEED).copy()
 
 def rotate_particles_to_match_axes(particles_df, old_axis_eta, old_axis_phi, new_axis_eta, new_axis_phi):
+    expected_cols = ["pt", "eta", "phi", "pid", "source", "weight", "energy"]
     if particles_df.empty:
-        return particles_df.copy()
+        # Return an empty DataFrame with the expected columns
+        return pd.DataFrame(columns=[col for col in expected_cols if col in particles_df.columns])
     deta = new_axis_eta - old_axis_eta
     dphi = map_ang_mpitopi(new_axis_phi - old_axis_phi)
     rotated_df = particles_df.copy()
@@ -591,4 +593,4 @@ if __name__ == '__main__':
     pp_datapath    = "/home/PP"
     hydro_datapath = "/home/Hydrobackground"
     outfilename    = "/home/EEC_embed.root"
-    energy_energy_correlator_pbpbpp(pbpb_datapath, pp_datapath, hydro_datapath, outfilename, start_file=0, end_file=1299, pp_start=0, pp_end=2999)
+    energy_energy_correlator_pbpbpp(pbpb_datapath, pp_datapath, hydro_datapath, outfilename, start_file=0, end_file=7999, pp_start=0, pp_end=7999)
