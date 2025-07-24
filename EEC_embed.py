@@ -14,8 +14,10 @@ from const import *
 gROOT.SetBatch(True)
 
 MAX_DR = 0.5
+PT_MIN = 0.0
+PT_MAX = 500.0
 RANDOM_SEED = 22
-random.seed(RANDOM_SEED)
+
 
 
 def map_ang_mpitopi(x):
@@ -55,39 +57,67 @@ def load_hadron_particles(filepath, jet_eta=None, jet_phi=None):
     except Exception as e:
         print(f"Error processing hadron.dat: {e}")
         return pd.DataFrame()
-def load_spec_particles(filepath, jet_eta, jet_phi, cone_radius=MAX_DR):
+def load_spec_particles(filepath, jet_eta=None, jet_phi=None, cone_radius=MAX_DR, pt_min=PT_MIN, pt_max=PT_MAX):
+    """Load spec particles from dNdEtaPtdPtdPhi_Charged.dat with correct weights and pt filter, then apply cone cut if requested."""
     try:
         event_charged_dat = os.path.join(filepath, "dNdEtaPtdPtdPhi_Charged.dat")
         if not os.path.exists(event_charged_dat):
+            print(f"dNdEtaPtdPtdPhi_Charged.dat not found in {filepath}")
             return pd.DataFrame()
+
+        # Load and reshape (from code2)
         spec_data = np.loadtxt(event_charged_dat).reshape(NY, NPT, NPHI) / (HBARC**3.0)
-        eta_grid, pt_grid, phi_grid_unmapped = np.meshgrid(Y, PT, PHI, indexing='ij')
-        eta_flat = eta_grid.flatten()
-        pt_flat = pt_grid.flatten()
-        phi_flat = map_ang_mpitopi(phi_grid_unmapped.flatten())
-        final_mask = np.ones_like(eta_flat, dtype=bool)
-        if cone_radius is not None:
-            dr_mask = delta_r(eta_flat, phi_flat, jet_eta, jet_phi) < cone_radius
-            final_mask &= dr_mask
-        eta_width = np.empty_like(Y); eta_width[1:-1] = (Y[2:]-Y[:-2])/2.0; eta_width[0] = (Y[1]-Y[0])/2.0; eta_width[-1] = (Y[-1]-Y[-2])/2.0
+
+        # Bin widths
+        eta_width = np.empty_like(Y)
+        eta_width[1:-1] = (Y[2:] - Y[:-2]) / 2.0
+        eta_width[0] = (Y[1] - Y[0]) / 2.0
+        eta_width[-1] = (Y[-1] - Y[-2]) / 2.0
         pt_width = gala15w * INVP
         phi_width = np.pi * np.concatenate((gaulew48, gaulew48[::-1]))
-        width_grid = np.meshgrid(eta_width, pt_width, phi_width, indexing='ij')
-        particle_counts = (spec_data * width_grid[0] * width_grid[1] * width_grid[2] * pt_grid).flatten()
-        final_mask &= (particle_counts > 0)
-        if not np.any(final_mask):
+
+        # Make 3D grids for all variables and widths
+        eta_grid, pt_grid, phi_grid = np.meshgrid(Y, PT, PHI, indexing='ij')
+        eta_width_grid, pt_width_grid, phi_width_grid = np.meshgrid(eta_width, pt_width, phi_width, indexing='ij')
+
+        # dN = dN/dEta/ptdPt/dPhi * dEta * dPt * dPhi * pt
+        particle_counts = spec_data * eta_width_grid * pt_width_grid * phi_width_grid * pt_grid
+
+        # Flatten everything for DataFrame
+        eta_flat = eta_grid.flatten()
+        pt_flat = pt_grid.flatten()
+        phi_flat = map_ang_mpitopi(phi_grid.flatten())
+        particle_counts_flat = particle_counts.flatten()
+        eta_width_flat = eta_width_grid.flatten()
+        phi_width_flat = phi_width_grid.flatten()
+
+        # Mask for nonzero and pt range
+        mask = (particle_counts_flat > 0) & (pt_flat >= pt_min) & (pt_flat <= pt_max)
+        if not np.any(mask):
+            print("No spec particles found in pt range.")
             return pd.DataFrame()
+
         particles_df = pd.DataFrame({
-            "pt": pt_flat[final_mask],
-            "eta": eta_flat[final_mask],
-            "phi": phi_flat[final_mask],
-            "weight": particle_counts[final_mask],
+            "pt": pt_flat[mask],
+            "eta": eta_flat[mask],
+            "phi": phi_flat[mask],
+            "weight": particle_counts_flat[mask],
+            "eta_width": eta_width_flat[mask],
+            "phi_width": phi_width_flat[mask],
             "source": "spec"
         })
+
+        # Apply cone cut if requested
+        if jet_eta is not None and jet_phi is not None and cone_radius is not None:
+            dr_to_jet = delta_r(particles_df["eta"], particles_df["phi"], jet_eta, jet_phi)
+            particles_df = particles_df[dr_to_jet < cone_radius]
+
         return particles_df
+
     except Exception as e:
-        print(f"Error processing dNdEtaPtdPtdPhi_Charged.dat: {e}")
+        print(f"Error processing spec data: {e}")
         return pd.DataFrame()
+
     
 def load_newconrecom_particles(filepath, jet_eta, jet_phi, cone_radius=MAX_DR):
     try:
