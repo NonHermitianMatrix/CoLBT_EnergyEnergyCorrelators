@@ -1,0 +1,600 @@
+"""
+Gets EEC of PbPb events and PP events after embedding them in PbPb events
+"""
+import numpy as np
+import pandas as pd
+import ROOT
+from ROOT import TFile, TH1D, TLorentzVector, gROOT
+import math
+import os
+import random
+from spec_new import *
+from const import *
+
+gROOT.SetBatch(True)
+
+MAX_DR = 0.5
+PT_MIN = 0.0
+PT_MAX = 500.0
+RANDOM_SEED = 55
+
+
+
+
+def map_ang_mpitopi(x):
+    return ((x + np.pi) % (2 * np.pi)) - np.pi
+
+def delta_r(eta1, phi1, eta2, phi2):
+    dphi = map_ang_mpitopi(phi1 - phi2)
+    deta = eta1 - eta2
+    return np.sqrt(deta**2 + dphi**2)
+
+def load_hadron_particles(filepath, jet_eta=None, jet_phi=None):
+    try:
+        hadron_path = os.path.join(filepath, "hadron.dat")
+        if not os.path.exists(hadron_path):
+            return pd.DataFrame()
+        hadron_df = pd.read_csv(hadron_path, sep='\s+', names=["pid", "px","py","pz","E"], engine='python')
+        if hadron_df.empty:
+            return pd.DataFrame()
+        hadron_df["pt"] = np.sqrt(hadron_df["px"]**2 + hadron_df["py"]**2)
+        hadron_df["p"] = np.sqrt(hadron_df["pt"]**2 + hadron_df["pz"]**2)
+        hadron_df["phi"] = map_ang_mpitopi(np.arctan2(hadron_df["py"], hadron_df["px"]))
+        p_minus_pz = hadron_df["p"] - hadron_df["pz"]
+        valid_eta = p_minus_pz > 1e-9
+        hadron_df["eta"] = np.nan
+        hadron_df.loc[valid_eta, "eta"] = 0.5 * np.log((hadron_df.loc[valid_eta, "p"] + hadron_df.loc[valid_eta, "pz"]) / p_minus_pz[valid_eta])
+        hadron_df.dropna(subset=['eta'], inplace=True)
+        charged_pids = [211, 321, 2212, 3222, 3112, 3312, 3334, 11, 13]
+        charged_particles_df = hadron_df[np.abs(hadron_df["pid"]).isin(charged_pids)].copy()
+        if jet_eta is not None and jet_phi is not None:
+            dr_to_jet = delta_r(charged_particles_df["eta"], charged_particles_df["phi"], jet_eta, jet_phi)
+            charged_particles_df = charged_particles_df[dr_to_jet < MAX_DR]
+        charged_particles_df["source"] = "signal_hadron"
+        charged_particles_df["weight"] = 1.0
+        charged_particles_df.rename(columns={'E': 'energy'}, inplace=True)
+        final_cols = ["pt", "eta", "phi", "pid", "source", "weight", "energy"]
+        return charged_particles_df[[col for col in final_cols if col in charged_particles_df.columns]]
+    except Exception as e:
+        print(f"Error processing hadron.dat: {e}")
+        return pd.DataFrame()
+def load_spec_particles(filepath, jet_eta=None, jet_phi=None, cone_radius=MAX_DR, pt_min=PT_MIN, pt_max=PT_MAX):
+    """
+    Load spec particles from dNdEtaPtdPtdPhi_Charged.dat with correct weights (pt quadrature weight * pt),
+    then apply pt filter and cone cut if requested.
+    Each row represents a (eta, pt, phi) bin, and 'weight' is the expected dN in that bin.
+    """
+    try:
+        event_charged_dat = os.path.join(filepath, "dNdEtaPtdPtdPhi_Charged.dat")
+        if not os.path.exists(event_charged_dat):
+            print(f"dNdEtaPtdPtdPhi_Charged.dat not found in {filepath}")
+            return pd.DataFrame()
+
+        # Load and reshape
+        spec_data = np.loadtxt(event_charged_dat).reshape(NY, NPT, NPHI) / (HBARC**3.0)
+
+        # pt weights and pt values (broadcast to 3D)
+        pt_weight = gala15w * INVP  # shape (15,)
+        pt_weight_grid = pt_weight[np.newaxis, :, np.newaxis]  # shape (1, 15, 1)
+        pt_grid = PT[np.newaxis, :, np.newaxis]  # shape (1, 15, 1)
+
+        # The "weight" for each (η, pt, φ) bin is spec_data * pt_weight * pt
+        weights = (spec_data * pt_weight_grid * pt_grid).flatten()
+
+        # Bin centers
+        eta_grid, pt_grid_full, phi_grid = np.meshgrid(Y, PT, PHI, indexing='ij')
+        eta_flat = eta_grid.flatten()
+        pt_flat = pt_grid_full.flatten()
+        phi_flat = map_ang_mpitopi(phi_grid.flatten())
+
+        # Mask for nonzero and pt range
+        mask = (weights > 0) & (pt_flat >= pt_min) & (pt_flat <= pt_max)
+        if not np.any(mask):
+            print("No spec particles found in pt range.")
+            return pd.DataFrame()
+
+        particles_df = pd.DataFrame({
+            "pt": pt_flat[mask],
+            "eta": eta_flat[mask],
+            "phi": phi_flat[mask],
+            "weight": weights[mask],
+            "source": "spec"
+        })
+
+        # Apply cone cut if requested
+        if jet_eta is not None and jet_phi is not None and cone_radius is not None:
+            dr_to_jet = delta_r(particles_df["eta"], particles_df["phi"], jet_eta, jet_phi)
+            particles_df = particles_df[dr_to_jet < cone_radius]
+
+        return particles_df
+
+    except Exception as e:
+        print(f"Error processing spec data: {e}")
+        return pd.DataFrame()        
+def load_newconrecom_particles(filepath, jet_eta, jet_phi, cone_radius=MAX_DR):
+    try:
+        newcon_path = os.path.join(filepath, "NewConRecom.dat")
+        if not os.path.exists(newcon_path):
+            return pd.DataFrame()
+        newcon_df = pd.read_csv(newcon_path, sep='\s+', names=["pid","px","py","pz","E","mass","x","y","z","t"], engine='python')
+        if newcon_df.empty: return pd.DataFrame()
+        newcon_df["pt"] = np.sqrt(newcon_df["px"]**2 + newcon_df["py"]**2)
+        newcon_df["p"] = np.sqrt(newcon_df["pt"]**2 + newcon_df["pz"]**2)
+        newcon_df["phi"] = map_ang_mpitopi(np.arctan2(newcon_df["py"], newcon_df["px"]))
+        p_minus_pz = newcon_df["p"] - newcon_df["pz"]
+        valid_eta = p_minus_pz > 1e-9
+        newcon_df["eta"] = np.nan
+        newcon_df.loc[valid_eta, "eta"] = 0.5 * np.log((newcon_df.loc[valid_eta, "p"] + newcon_df.loc[valid_eta, "pz"]) / p_minus_pz[valid_eta])
+        newcon_df.dropna(subset=['eta'], inplace=True)
+        charged_pids = [211, 321, 2212, 3222, 3112, 3312, 3334, 11, 13]
+        charged_particles_df = newcon_df[np.abs(newcon_df["pid"]).isin(charged_pids)].copy()
+        if cone_radius is not None:
+            dr_to_jet = delta_r(charged_particles_df["eta"], charged_particles_df["phi"], jet_eta, jet_phi)
+            final_df = charged_particles_df[dr_to_jet < cone_radius].copy()
+        else:
+            final_df = charged_particles_df.copy()
+        final_df["source"] = "newcon"
+        final_df["weight"] = 1.0
+        final_cols = ["pt", "eta", "phi", "source", "weight"]
+        return final_df[final_cols]
+    except Exception as e:
+        print(f"Error processing NewConRecom.dat: {e}")
+        return pd.DataFrame()
+
+def select_equal_particles(df1, df2):
+    if df1.empty or df2.empty:
+        return df1.copy(), df2.copy()
+    n1, n2 = len(df1), len(df2)
+    if n1 == n2:
+        return df1.copy(), df2.copy()
+    elif n1 > n2:
+        return df1.sample(n=n2, random_state=RANDOM_SEED).copy(), df2.copy()
+    else:
+        return df1.copy(), df2.sample(n=n1, random_state=RANDOM_SEED).copy()
+
+def rotate_particles_to_match_axes(particles_df, old_axis_eta, old_axis_phi, new_axis_eta, new_axis_phi):
+    expected_cols = ["pt", "eta", "phi", "pid", "source", "weight", "energy"]
+    if particles_df.empty:
+        # Return an empty DataFrame with the expected columns
+        return pd.DataFrame(columns=[col for col in expected_cols if col in particles_df.columns])
+    deta = new_axis_eta - old_axis_eta
+    dphi = map_ang_mpitopi(new_axis_phi - old_axis_phi)
+    rotated_df = particles_df.copy()
+    rotated_df["eta"] += deta
+    rotated_df["phi"] = map_ang_mpitopi(rotated_df["phi"] + dphi)
+    return rotated_df
+
+def find_matching_pp_event(pb_gamma_pt, available_pp_events):
+    tolerance = 0.05 * pb_gamma_pt
+    for i, (pp_idx, pp_gamma_pt_val) in enumerate(available_pp_events):
+        if abs(pp_gamma_pt_val - pb_gamma_pt) < tolerance:
+            return i, pp_idx, pp_gamma_pt_val
+    return -1, -1, None
+
+def particles_to_arrays(particles_df):
+    return (
+        particles_df["eta"].to_numpy(dtype=np.float64),
+        particles_df["phi"].to_numpy(dtype=np.float64),
+        particles_df["pt"].to_numpy(dtype=np.float64),
+        particles_df.get("weight", pd.Series(np.ones(len(particles_df)), index=particles_df.index)).to_numpy(dtype=np.float64)
+    )
+
+def fill_histogram_pairs(hist, eta, phi, pt, weight, jet_pt, n_exp, dr_max):
+    n = len(eta)
+    if n < 2:
+        return
+    idx_i, idx_j = np.triu_indices(n, k=1)
+    deta = eta[idx_i] - eta[idx_j]
+    dphi = map_ang_mpitopi(phi[idx_i] - phi[idx_j])
+    dr = np.sqrt(deta**2 + dphi**2)
+    mask = dr < dr_max
+    dr = dr[mask]
+    pt_i = pt[idx_i][mask]
+    pt_j = pt[idx_j][mask]
+    w_i = weight[idx_i][mask]
+    w_j = weight[idx_j][mask]
+    pair_weight = ((pt_i * pt_j) / (jet_pt**2))**n_exp * w_i * w_j
+    hist.FillN(len(dr), dr, pair_weight)
+
+def fill_histogram_cross_pairs(hist, eta1, phi1, pt1, weight1, eta2, phi2, pt2, weight2, jet_pt, n_exp, dr_max):
+    n1 = len(eta1)
+    n2 = len(eta2)
+    if n1 == 0 or n2 == 0:
+        return
+    deta = eta1[:, None] - eta2[None, :]
+    dphi = map_ang_mpitopi(phi1[:, None] - phi2[None, :])
+    dr = np.sqrt(deta**2 + dphi**2)
+    mask = dr < dr_max
+    pt1_2d = pt1[:, None]
+    pt2_2d = pt2[None, :]
+    w1_2d = weight1[:, None]
+    w2_2d = weight2[None, :]
+    pair_weight = ((pt1_2d * pt2_2d) / (jet_pt**2))**n_exp * w1_2d * w2_2d
+    dr_flat = dr[mask]
+    pair_weight_flat = pair_weight[mask]
+    hist.FillN(len(dr_flat), dr_flat, pair_weight_flat)
+
+def energy_energy_correlator_pbpbpp(
+    pbpb_datapath, pp_datapath, hydro_datapath, outfilename, 
+    start_file, end_file, pp_start, pp_end
+):
+    print("getting PP events...")
+    available_pp_events = []
+    for pp_idx in range(pp_start, pp_end):
+        pp_path = os.path.join(pp_datapath, f"event{pp_idx}")
+        gamma_file = os.path.join(pp_path, "gamma.dat")
+        hadjet_file = os.path.join(pp_path, "hadjet.dat")
+        if not (os.path.exists(gamma_file) and os.path.exists(hadjet_file)):
+            continue
+        try:
+            gamma_df = pd.read_csv(gamma_file, sep='\s+', names=["px","py","pz","E"], engine='python')
+            hadjet_df = pd.read_csv(hadjet_file, sep='\s+', names=["jno","px","py","pz","E","eta"], engine='python')
+            if len(gamma_df) == 0 or len(hadjet_df) == 0:
+                continue
+            pp_gamma_pt = np.sqrt(gamma_df["px"][0]**2 + gamma_df["py"][0]**2)
+            available_pp_events.append((pp_idx, pp_gamma_pt))
+        except Exception as e:
+            continue
+    print(f"Found {len(available_pp_events)} valid PP events")
+    gamma_pt_bins = [(0, 500)]
+    p_ch_T_cuts = [0.0, 1.0]
+    delta_r_min = 0.01
+    delta_r_max = 1
+    n_bins = 40
+    log_min = np.log10(delta_r_min)
+    log_max = np.log10(delta_r_max)
+    delta_r_bins = np.logspace(log_min, log_max, n_bins+1)
+    n_pt_bins = len(gamma_pt_bins)
+    pbpb_jet_counts = ROOT.TH1D("pbpb_jet_counts", "PbPb Jet Counts by pT Bin;gamma pT Bin;Count", n_pt_bins, 0, n_pt_bins)
+    pp_jet_counts = ROOT.TH1D("pp_jet_counts", "PP Jet Counts by pT Bin;gamma pT Bin;Count", n_pt_bins, 0, n_pt_bins)
+    for i, (pt_min, pt_max) in enumerate(gamma_pt_bins):
+        bin_label = f"{pt_min}-{pt_max} GeV"
+        pbpb_jet_counts.GetXaxis().SetBinLabel(i+1, bin_label)
+        pp_jet_counts.GetXaxis().SetBinLabel(i+1, bin_label)
+    pbpb_signal_hists = {}
+    for n_exp in [0,1,2]:
+        for gamma_pt_bin in gamma_pt_bins:
+            for p_ch_T_cut in p_ch_T_cuts:
+                key = (n_exp, gamma_pt_bin[0], gamma_pt_bin[1], p_ch_T_cut)
+                hist_name = f"eec_n{n_exp}_jetpt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
+                hist_title = f"PbPb EEC n={n_exp}, Gamma pT {gamma_pt_bin[0]}-{gamma_pt_bin[1]}, p_ch>{p_ch_T_cut};R_L;EEC"
+                pbpb_signal_hists[key] = ROOT.TH1D(f"pbpb_signal_{hist_name}", hist_title, n_bins, delta_r_bins)
+                pbpb_signal_hists[key].Sumw2()
+    pbpb_sm1_hists, pbpb_m1m1_hists, pbpb_m1m2_hists = {}, {}, {}
+    pbpb_spec_m1_hists = {}
+    for n_exp in [0,1,2]:
+        for gamma_pt_bin in gamma_pt_bins:
+            for p_ch_T_cut in p_ch_T_cuts:
+                key = (n_exp, gamma_pt_bin[0], gamma_pt_bin[1], p_ch_T_cut)
+                hist_name = f"eec_n{n_exp}_jetpt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
+                hist_title = f"PbPb Spec vs M1 EEC n={n_exp}, Gamma pT {gamma_pt_bin[0]}-{gamma_pt_bin[1]}, p_ch>{p_ch_T_cut};R_L;EEC"
+                pbpb_spec_m1_hists[key] = ROOT.TH1D(f"pbpb_spec_m1_{hist_name}", hist_title, n_bins, delta_r_bins)
+                pbpb_spec_m1_hists[key].Sumw2()
+    pp_spec_m1_hists = {}
+    for n_exp in [0,1,2]:
+        for gamma_pt_bin in gamma_pt_bins:
+            for p_ch_T_cut in p_ch_T_cuts:
+                key = (n_exp, gamma_pt_bin[0], gamma_pt_bin[1], p_ch_T_cut)
+                hist_name = f"eec_n{n_exp}_jetpt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
+                hist_title = f"PP Spec vs M1 EEC n={n_exp}, gamma pT {gamma_pt_bin[0]}-{gamma_pt_bin[1]}, p_ch>{p_ch_T_cut};R_L;EEC"
+                pp_spec_m1_hists[key] = ROOT.TH1D(f"pp_spec_m1_{hist_name}", hist_title, n_bins, delta_r_bins)
+                pp_spec_m1_hists[key].Sumw2()
+    for n_exp in [0,1,2]:
+        for gamma_pt_bin in gamma_pt_bins:
+            for p_ch_T_cut in p_ch_T_cuts:
+                key = (n_exp, gamma_pt_bin[0], gamma_pt_bin[1], p_ch_T_cut)
+                hist_name = f"eec_n{n_exp}_jetpt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
+                hist_title = f"PbPb EEC n={n_exp}, Gamma pT {gamma_pt_bin[0]}-{gamma_pt_bin[1]}, p_ch>{p_ch_T_cut};R_L;EEC"
+                for hdict, prefix in zip(
+                    [pbpb_sm1_hists, pbpb_m1m1_hists, pbpb_m1m2_hists],
+                    ["sm1", "m1m1", "m1m2"]
+                ):
+                    hdict[key] = ROOT.TH1D(f"pbpb_{prefix}_{hist_name}", hist_title, n_bins, delta_r_bins)
+                    hdict[key].Sumw2()
+    pp_signal_hists, pp_sm1_hists, pp_m1m1_hists, pp_m1m2_hists = {}, {}, {}, {}
+    for n_exp in [0,1,2]:
+        for gamma_pt_bin in gamma_pt_bins:
+            for p_ch_T_cut in p_ch_T_cuts:
+                key = (n_exp, gamma_pt_bin[0], gamma_pt_bin[1], p_ch_T_cut)
+                hist_name = f"eec_n{n_exp}_jetpt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
+                hist_title = f"PP EEC n={n_exp}, gamma pT {gamma_pt_bin[0]}-{gamma_pt_bin[1]}, p_ch>{p_ch_T_cut};R_L;EEC"
+                for hdict, prefix in zip(
+                    [pp_signal_hists, pp_sm1_hists, pp_m1m1_hists, pp_m1m2_hists],
+                    ["signal", "sm1", "m1m1", "m1m2"]
+                ):
+                    hdict[key] = ROOT.TH1D(f"pp_{prefix}_{hist_name}", hist_title, n_bins, delta_r_bins)
+                    hdict[key].Sumw2()
+    pp_hadron_cone_hists = {}
+    for n_exp in [0,1,2]:
+        for gamma_pt_bin in gamma_pt_bins:
+            for p_ch_T_cut in p_ch_T_cuts:
+                key = (n_exp, gamma_pt_bin[0], gamma_pt_bin[1], p_ch_T_cut)
+                hist_name = f"eec_n{n_exp}_jetpt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
+                hist_title = f"PP Hadron in Jet Cone EEC n={n_exp}, gamma pT {gamma_pt_bin[0]}-{gamma_pt_bin[1]}, p_ch>{p_ch_T_cut};R_L;EEC"
+                pp_hadron_cone_hists[key] = ROOT.TH1D(f"pp_hadron_cone_{hist_name}", hist_title, n_bins, delta_r_bins)
+                pp_hadron_cone_hists[key].Sumw2()
+    pbpb_newcon_cone_hists = {}
+    for n_exp in [0,1,2]:
+        for gamma_pt_bin in gamma_pt_bins:
+            for p_ch_T_cut in p_ch_T_cuts:
+                key = (n_exp, gamma_pt_bin[0], gamma_pt_bin[1], p_ch_T_cut)
+                hist_name = f"eec_n{n_exp}_jetpt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
+                hist_title = f"PbPb NewConRecom in Jet Cone EEC n={n_exp}, gamma pT {gamma_pt_bin[0]}-{gamma_pt_bin[1]}, p_ch>{p_ch_T_cut};R_L;EEC"
+                pbpb_newcon_cone_hists[key] = ROOT.TH1D(f"pbpb_newcon_cone_{hist_name}", hist_title, n_bins, delta_r_bins)
+                pbpb_newcon_cone_hists[key].Sumw2()
+    processed_pb_events = 0
+    processed_pp_events = 0
+    for evt_idx in range(start_file, end_file):
+        print(f"Processing PbPb event {evt_idx}")
+        pbpb_path = os.path.join(pbpb_datapath, f"event{evt_idx}")
+        hadjet_file = os.path.join(pbpb_path, "hadjet.dat")
+        gamma_file  = os.path.join(pbpb_path, "gamma.dat")
+        if not (os.path.exists(hadjet_file) and os.path.exists(gamma_file)):
+            print(f"Missing files for PbPb event {evt_idx}")
+            continue
+        try:
+            current_hadjet_df = pd.read_csv(hadjet_file, sep='\s+', names=["jet_no","px","py","pz","E","eta"], engine='python')
+            gamma_df = pd.read_csv(gamma_file, sep='\s+', names=["px","py","pz","E"], engine='python')
+        except:
+            print(f"Error reading files for PbPb event {evt_idx}")
+            continue
+        if len(current_hadjet_df) == 0 or len(gamma_df) == 0:
+            print(f"Empty dataframes in PbPb event {evt_idx}")
+            continue
+        current_hadjet_df['phi'] = map_ang_mpitopi(np.arctan2(current_hadjet_df["py"], current_hadjet_df["px"]))
+        current_hadjet_df['pt'] = np.sqrt(current_hadjet_df["px"]**2 + current_hadjet_df["py"]**2)
+        gamma_df['pt'] = np.sqrt(gamma_df["px"]**2 + gamma_df["py"]**2)
+        jet_row = current_hadjet_df.iloc[0]
+        jet_eta, jet_phi = jet_row["eta"], jet_row["phi"]
+        pb_gamma_pt = gamma_df["pt"].iloc[0] 
+        jet_pt = jet_row["pt"]
+        active_pt_bins = []
+        for i, (pt_min, pt_max) in enumerate(gamma_pt_bins):
+            if pt_min <= pb_gamma_pt < pt_max:  
+                active_pt_bins.append((pt_min, pt_max))
+        if not active_pt_bins:
+            print(f"PbPb gamma pT {pb_gamma_pt} not in any bin")
+            continue
+        match_index, matched_pp_idx, matched_pp_gamma_pt = find_matching_pp_event(
+            pb_gamma_pt, available_pp_events
+        )
+        if match_index != -1:
+            available_pp_events.pop(match_index)
+        if matched_pp_idx == -1:
+            print(f"No matching PP event found for PbPb gamma pT {pb_gamma_pt}, skipping event")
+            continue
+        print(f"Found matching PP event {matched_pp_idx} with gamma pT {matched_pp_gamma_pt}")
+        pp_path = os.path.join(pp_datapath, f"event{matched_pp_idx}")
+        try:
+            pp_hadjet_df = pd.read_csv(os.path.join(pp_path, "hadjet.dat"), 
+                                    sep='\s+', names=["jno","px","py","pz","E","eta"], engine='python')
+            pp_gamma_df = pd.read_csv(os.path.join(pp_path, "gamma.dat"), 
+                                    sep='\s+', names=["px","py","pz","E"], engine='python')
+            pp_hadjet_df['pt'] = np.sqrt(pp_hadjet_df["px"]**2 + pp_hadjet_df["py"]**2)
+            pp_hadjet_df['phi'] = map_ang_mpitopi(np.arctan2(pp_hadjet_df["py"], pp_hadjet_df["px"]))
+            pp_jet_row = pp_hadjet_df.iloc[0]
+            pp_jet_eta, pp_jet_phi = pp_jet_row["eta"], pp_jet_row["phi"]
+            pp_jet_pt = pp_jet_row["pt"]
+        except Exception as e:
+            print(f"Error reading PP event {matched_pp_idx}, skipping PbPb event {evt_idx}: {e}")
+            continue
+        pbpb_newcon_particles = load_newconrecom_particles(pbpb_path, jet_eta, jet_phi)
+        pp_hadron_particles = load_hadron_particles(pp_path, pp_jet_eta, pp_jet_phi)
+        pbpb_newcon_particles, pp_hadron_particles = select_equal_particles(pbpb_newcon_particles, pp_hadron_particles)
+        pbpb_spec_particles = load_spec_particles(pbpb_path, jet_eta, jet_phi)
+        pbpb_signal_particles = pd.concat([pbpb_newcon_particles, pbpb_spec_particles], ignore_index=True)
+        current_hydro_torem = evt_idx % 400
+        available_events = list(set(range(400)) - {current_hydro_torem})
+        selected_events = random.sample(available_events, 2)
+        hydro_m1_evt = selected_events[0]
+        hydro_m2_evt = selected_events[1]
+        hydro_m1_path = os.path.join(hydro_datapath, f"event{hydro_m1_evt}")
+        hydro_m2_path = os.path.join(hydro_datapath, f"event{hydro_m2_evt}")
+        hydro_m1_particles = load_spec_particles(hydro_m1_path, jet_eta, jet_phi)
+        hydro_m2_particles = load_spec_particles(hydro_m2_path, jet_eta, jet_phi)
+        rotated_hadron_particles = rotate_particles_to_match_axes(
+            pp_hadron_particles, pp_jet_eta, pp_jet_phi, jet_eta, jet_phi
+        )
+        pp_mb_evt = current_hydro_torem
+        pp_mb_path = os.path.join(hydro_datapath, f"event{pp_mb_evt}")
+        pp_spec_particles = load_spec_particles(pp_mb_path, jet_eta, jet_phi)
+        pp_signal_particles = pd.concat([rotated_hadron_particles, pp_spec_particles], ignore_index=True)
+        pp_m1_particles = load_spec_particles(hydro_m1_path, jet_eta, jet_phi)
+        pp_m2_particles = load_spec_particles(hydro_m2_path, jet_eta, jet_phi)
+        all_filtered_particles = {}
+        # List of all DataFrames that must have 'pt' and not be empty
+        required_dfs = [
+            pbpb_signal_particles, hydro_m1_particles, hydro_m2_particles,
+            pbpb_newcon_particles, pbpb_spec_particles,
+            pp_signal_particles, rotated_hadron_particles,
+            pp_m1_particles, pp_m2_particles
+        ]
+        # Check for empty DataFrames or missing 'pt' column
+        if any(df.empty or 'pt' not in df.columns for df in required_dfs):
+            print(f"Skipping event {evt_idx} due to empty DataFrame or missing 'pt' column")
+            continue
+        all_filtered_particles = {}
+        for p_ch_T_cut in p_ch_T_cuts:
+            all_filtered_particles[p_ch_T_cut] = {
+                'pbpb_signal': pbpb_signal_particles[pbpb_signal_particles["pt"] >= p_ch_T_cut],
+                'pbpb_hydro_m1': hydro_m1_particles[hydro_m1_particles["pt"] >= p_ch_T_cut],
+                'pbpb_hydro_m2': hydro_m2_particles[hydro_m2_particles["pt"] >= p_ch_T_cut],
+                'pbpb_newcon': pbpb_newcon_particles[pbpb_newcon_particles["pt"] >= p_ch_T_cut],
+                'pbpb_spec': pbpb_spec_particles[pbpb_spec_particles["pt"] >= p_ch_T_cut],
+                'pp_signal': pp_signal_particles[pp_signal_particles["pt"] >= p_ch_T_cut],
+                'pp_hadron_cone': rotated_hadron_particles[rotated_hadron_particles["pt"] >= p_ch_T_cut],
+                'pp_m1': pp_m1_particles[pp_m1_particles["pt"] >= p_ch_T_cut],
+                'pp_m2': pp_m2_particles[pp_m2_particles["pt"] >= p_ch_T_cut]
+            }
+        skip_event = False
+        for p_ch_T_cut in p_ch_T_cuts:
+            filtered = all_filtered_particles[p_ch_T_cut]
+            if (len(filtered['pbpb_signal']) < 2 or len(filtered['pbpb_hydro_m1']) < 2 or 
+                len(filtered['pbpb_newcon']) < 2 or len(filtered['pp_signal']) < 2 or 
+                len(filtered['pp_m1']) < 2):
+                skip_event = True
+                break
+        if skip_event:
+            continue
+        for p_ch_T_cut in p_ch_T_cuts:
+            filtered = all_filtered_particles[p_ch_T_cut]
+            signal_filtered = filtered['pbpb_signal']
+            hydro_m1_filtered = filtered['pbpb_hydro_m1']
+            hydro_m2_filtered = filtered['pbpb_hydro_m2']
+            newcon_filtered = filtered['pbpb_newcon']
+            spec_filtered = filtered['pbpb_spec']
+            if len(signal_filtered) >= 2:
+                eta, phi, pt, weight = particles_to_arrays(signal_filtered)
+                for n_exp in [0,1,2]:
+                    for pt_bin in active_pt_bins:
+                        key = (n_exp, pt_bin[0], pt_bin[1], p_ch_T_cut)
+                        fill_histogram_pairs(pbpb_signal_hists[key], eta, phi, pt, weight, jet_pt, n_exp, delta_r_max)
+            if len(signal_filtered) > 0 and len(hydro_m1_filtered) > 0:
+                eta1, phi1, pt1, weight1 = particles_to_arrays(signal_filtered)
+                eta2, phi2, pt2, weight2 = particles_to_arrays(hydro_m1_filtered)
+                for n_exp in [0,1,2]:
+                    for pt_bin in active_pt_bins:
+                        key = (n_exp, pt_bin[0], pt_bin[1], p_ch_T_cut)
+                        fill_histogram_cross_pairs(pbpb_sm1_hists[key], eta1, phi1, pt1, weight1, eta2, phi2, pt2, weight2, jet_pt, n_exp, delta_r_max)
+            if len(hydro_m1_filtered) >= 2:
+                eta, phi, pt, weight = particles_to_arrays(hydro_m1_filtered)
+                for n_exp in [0,1,2]:
+                    for pt_bin in active_pt_bins:
+                        key = (n_exp, pt_bin[0], pt_bin[1], p_ch_T_cut)
+                        fill_histogram_pairs(pbpb_m1m1_hists[key], eta, phi, pt, weight, jet_pt, n_exp, delta_r_max)
+            if len(hydro_m1_filtered) > 0 and len(hydro_m2_filtered) > 0:
+                eta1, phi1, pt1, weight1 = particles_to_arrays(hydro_m1_filtered)
+                eta2, phi2, pt2, weight2 = particles_to_arrays(hydro_m2_filtered)
+                for n_exp in [0,1,2]:
+                    for pt_bin in active_pt_bins:
+                        key = (n_exp, pt_bin[0], pt_bin[1], p_ch_T_cut)
+                        fill_histogram_cross_pairs(pbpb_m1m2_hists[key], eta1, phi1, pt1, weight1, eta2, phi2, pt2, weight2, jet_pt, n_exp, delta_r_max)
+            spec_filtered = filtered['pbpb_spec']
+            if len(spec_filtered) > 0 and len(hydro_m1_filtered) > 0:
+                eta1, phi1, pt1, weight1 = particles_to_arrays(spec_filtered)
+                eta2, phi2, pt2, weight2 = particles_to_arrays(hydro_m1_filtered)
+                for n_exp in [0,1,2]:
+                    for pt_bin in active_pt_bins:
+                        key = (n_exp, pt_bin[0], pt_bin[1], p_ch_T_cut)
+                        fill_histogram_cross_pairs(pbpb_spec_m1_hists[key], eta1, phi1, pt1, weight1, eta2, phi2, pt2, weight2, jet_pt, n_exp, delta_r_max)
+            if len(newcon_filtered) >= 2:
+                eta, phi, pt, weight = particles_to_arrays(newcon_filtered)
+                for n_exp in [0,1,2]:
+                    for pt_bin in active_pt_bins:
+                        key = (n_exp, pt_bin[0], pt_bin[1], p_ch_T_cut)
+                        fill_histogram_pairs(pbpb_newcon_cone_hists[key], eta, phi, pt, weight, jet_pt, n_exp, delta_r_max)
+        for i, (pt_min, pt_max) in enumerate(gamma_pt_bins):
+            if pt_min <= pb_gamma_pt < pt_max:  
+                pbpb_jet_counts.Fill(i)
+        processed_pb_events += 1
+        for p_ch_T_cut in p_ch_T_cuts:
+            filtered = all_filtered_particles[p_ch_T_cut]
+            signal_filtered = filtered['pp_signal']
+            hadron_cone_filtered = filtered['pp_hadron_cone']
+            pp_m1_filtered = filtered['pp_m1']
+            pp_m2_filtered = filtered['pp_m2']
+            if len(signal_filtered) >= 2:
+                eta, phi, pt, weight = particles_to_arrays(signal_filtered)
+                for n_exp in [0,1,2]:
+                    for pt_bin in active_pt_bins:
+                        key = (n_exp, pt_bin[0], pt_bin[1], p_ch_T_cut)
+                        fill_histogram_pairs(pp_signal_hists[key], eta, phi, pt, weight, pp_jet_pt, n_exp, delta_r_max)
+            if len(signal_filtered) > 0 and len(pp_m1_filtered) > 0:
+                eta1, phi1, pt1, weight1 = particles_to_arrays(signal_filtered)
+                eta2, phi2, pt2, weight2 = particles_to_arrays(pp_m1_filtered)
+                for n_exp in [0,1,2]:
+                    for pt_bin in active_pt_bins:
+                        key = (n_exp, pt_bin[0], pt_bin[1], p_ch_T_cut)
+                        fill_histogram_cross_pairs(pp_sm1_hists[key], eta1, phi1, pt1, weight1, eta2, phi2, pt2, weight2, pp_jet_pt, n_exp, delta_r_max)
+            if len(pp_m1_filtered) >= 2:
+                eta, phi, pt, weight = particles_to_arrays(pp_m1_filtered)
+                for n_exp in [0,1,2]:
+                    for pt_bin in active_pt_bins:
+                        key = (n_exp, pt_bin[0], pt_bin[1], p_ch_T_cut)
+                        fill_histogram_pairs(pp_m1m1_hists[key], eta, phi, pt, weight, pp_jet_pt, n_exp, delta_r_max)
+            if len(pp_m1_filtered) > 0 and len(pp_m2_filtered) > 0:
+                eta1, phi1, pt1, weight1 = particles_to_arrays(pp_m1_filtered)
+                eta2, phi2, pt2, weight2 = particles_to_arrays(pp_m2_filtered)
+                for n_exp in [0,1,2]:
+                    for pt_bin in active_pt_bins:
+                        key = (n_exp, pt_bin[0], pt_bin[1], p_ch_T_cut)
+                        fill_histogram_cross_pairs(pp_m1m2_hists[key], eta1, phi1, pt1, weight1, eta2, phi2, pt2, weight2, pp_jet_pt, n_exp, delta_r_max)
+            if len(hadron_cone_filtered) >= 2:
+                eta, phi, pt, weight = particles_to_arrays(hadron_cone_filtered)
+                for n_exp in [0,1,2]:
+                    for pt_bin in active_pt_bins:
+                        key = (n_exp, pt_bin[0], pt_bin[1], p_ch_T_cut)
+                        fill_histogram_pairs(pp_hadron_cone_hists[key], eta, phi, pt, weight, pp_jet_pt, n_exp, delta_r_max)
+        for i, (pt_min, pt_max) in enumerate(gamma_pt_bins):
+            if pt_min <= pb_gamma_pt < pt_max:  
+                pp_jet_counts.Fill(i)
+        processed_pp_events += 1
+        print(f"Processed PP event {matched_pp_idx}")
+        print(f"Progress: {evt_idx-start_file+1}/{end_file-start_file} event pairs")
+        print(f"Successfully processed: {processed_pb_events} PbPb events, {processed_pp_events} PP events")
+    print(f"Completed processing with {processed_pb_events} PbPb events and {processed_pp_events} PP events")
+    outfile = ROOT.TFile(outfilename, "RECREATE")
+    pbpb_dir = outfile.mkdir("PbPb")
+    pp_dir = outfile.mkdir("PP")
+    counts_dir = outfile.mkdir("JetCounts")
+    pp_hadron_cone_dir = pp_dir.mkdir("hadron_cone")
+    pp_dir.cd()
+    pp_signal_dir = pp_dir.mkdir("signal")
+    pp_sm1_dir = pp_dir.mkdir("sm1")
+    pp_m1m1_dir = pp_dir.mkdir("m1m1")
+    pp_m1m2_dir = pp_dir.mkdir("m1m2")
+    counts_dir.cd()
+    pbpb_jet_counts.Write()
+    pp_jet_counts.Write()
+    pbpb_signal_dir = pbpb_dir.mkdir("signal")
+    pbpb_sm1_dir = pbpb_dir.mkdir("sm1")
+    pbpb_m1m1_dir = pbpb_dir.mkdir("m1m1")
+    pbpb_m1m2_dir = pbpb_dir.mkdir("m1m2")
+    pbpb_spec_m1_dir = pbpb_dir.mkdir("spec_m1")
+    pp_spec_m1_dir = pp_dir.mkdir("spec_m1")
+    pbpb_newcon_cone_dir = pbpb_dir.mkdir("newcon_cone")
+    pbpb_newcon_cone_dir.cd()
+    for key, hist in pbpb_newcon_cone_hists.items():
+        hist.Write()
+    pbpb_signal_dir.cd()
+    for key, hist in pbpb_signal_hists.items():
+        hist.Write()
+    pbpb_sm1_dir.cd()
+    for key, hist in pbpb_sm1_hists.items():
+        hist.Write()
+    pbpb_m1m1_dir.cd()
+    for key, hist in pbpb_m1m1_hists.items():
+        hist.Write()
+    pbpb_m1m2_dir.cd()
+    for key, hist in pbpb_m1m2_hists.items():
+        hist.Write()
+    pp_signal_dir.cd()
+    for key, hist in pp_signal_hists.items():
+        hist.Write()
+    pp_sm1_dir.cd()
+    for key, hist in pp_sm1_hists.items():
+        hist.Write()
+    pp_m1m1_dir.cd()
+    for key, hist in pp_m1m1_hists.items():
+        hist.Write()
+    pp_m1m2_dir.cd()
+    for key, hist in pp_m1m2_hists.items():
+        hist.Write()
+    pp_hadron_cone_dir.cd()
+    for key, hist in pp_hadron_cone_hists.items():
+        hist.Write()
+    pbpb_spec_m1_dir.cd()
+    for key, hist in pbpb_spec_m1_hists.items():
+        hist.Write()
+    pp_spec_m1_dir.cd()
+    for key, hist in pp_spec_m1_hists.items():
+        hist.Write()
+    outfile.Close()
+    print(f"Histograms written to {outfilename}")
+
+if __name__ == '__main__':
+    pbpb_datapath  = "/home/CoLBT"
+    pp_datapath    = "/home/PP"
+    hydro_datapath = "/home/Hydrobackground"
+    outfilename    = "/home/EEC_embed2.root"
+    energy_energy_correlator_pbpbpp(pbpb_datapath, pp_datapath, hydro_datapath, outfilename, start_file=0, end_file=299, pp_start=0, pp_end=2999)
