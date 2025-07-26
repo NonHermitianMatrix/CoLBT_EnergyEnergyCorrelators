@@ -388,7 +388,7 @@ def energy_energy_correlator_pbpbpp(
             continue
         pbpb_newcon_particles = load_newconrecom_particles(pbpb_path, jet_eta, jet_phi)
         pp_hadron_particles = load_hadron_particles(pp_path, pp_jet_eta, pp_jet_phi)
-        pbpb_newcon_particles, pp_hadron_particles = select_equal_particles(pbpb_newcon_particles, pp_hadron_particles)
+        pbpb_newcon_particles, pp_hadron_particles = pbpb_newcon_particles, pp_hadron_particles
         pbpb_spec_particles = load_spec_particles(pbpb_path, jet_eta, jet_phi)
         pbpb_signal_particles = pd.concat([pbpb_newcon_particles, pbpb_spec_particles], ignore_index=True)
         current_hydro_torem = evt_idx % 400
