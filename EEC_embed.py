@@ -264,7 +264,7 @@ def energy_energy_correlator_pbpbpp(
         for gamma_pt_bin in gamma_pt_bins:
             for p_ch_T_cut in p_ch_T_cuts:
                 key = (n_exp, gamma_pt_bin[0], gamma_pt_bin[1], p_ch_T_cut)
-                hist_name = f"eec_n{n_exp}_jetpt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
+                hist_name = f"eec_n{n_exp}_gammapt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
                 hist_title = f"PbPb EEC n={n_exp}, Gamma pT {gamma_pt_bin[0]}-{gamma_pt_bin[1]}, p_ch>{p_ch_T_cut};R_L;EEC"
                 pbpb_signal_hists[key] = ROOT.TH1D(f"pbpb_signal_{hist_name}", hist_title, n_bins, delta_r_bins)
                 pbpb_signal_hists[key].Sumw2()
@@ -274,7 +274,7 @@ def energy_energy_correlator_pbpbpp(
         for gamma_pt_bin in gamma_pt_bins:
             for p_ch_T_cut in p_ch_T_cuts:
                 key = (n_exp, gamma_pt_bin[0], gamma_pt_bin[1], p_ch_T_cut)
-                hist_name = f"eec_n{n_exp}_jetpt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
+                hist_name = f"eec_n{n_exp}_gammapt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
                 hist_title = f"PbPb Spec vs M1 EEC n={n_exp}, Gamma pT {gamma_pt_bin[0]}-{gamma_pt_bin[1]}, p_ch>{p_ch_T_cut};R_L;EEC"
                 pbpb_spec_m1_hists[key] = ROOT.TH1D(f"pbpb_spec_m1_{hist_name}", hist_title, n_bins, delta_r_bins)
                 pbpb_spec_m1_hists[key].Sumw2()
@@ -283,7 +283,7 @@ def energy_energy_correlator_pbpbpp(
         for gamma_pt_bin in gamma_pt_bins:
             for p_ch_T_cut in p_ch_T_cuts:
                 key = (n_exp, gamma_pt_bin[0], gamma_pt_bin[1], p_ch_T_cut)
-                hist_name = f"eec_n{n_exp}_jetpt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
+                hist_name = f"eec_n{n_exp}_gammapt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
                 hist_title = f"PP Spec vs M1 EEC n={n_exp}, gamma pT {gamma_pt_bin[0]}-{gamma_pt_bin[1]}, p_ch>{p_ch_T_cut};R_L;EEC"
                 pp_spec_m1_hists[key] = ROOT.TH1D(f"pp_spec_m1_{hist_name}", hist_title, n_bins, delta_r_bins)
                 pp_spec_m1_hists[key].Sumw2()
@@ -291,7 +291,7 @@ def energy_energy_correlator_pbpbpp(
         for gamma_pt_bin in gamma_pt_bins:
             for p_ch_T_cut in p_ch_T_cuts:
                 key = (n_exp, gamma_pt_bin[0], gamma_pt_bin[1], p_ch_T_cut)
-                hist_name = f"eec_n{n_exp}_jetpt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
+                hist_name = f"eec_n{n_exp}_gammapt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
                 hist_title = f"PbPb EEC n={n_exp}, Gamma pT {gamma_pt_bin[0]}-{gamma_pt_bin[1]}, p_ch>{p_ch_T_cut};R_L;EEC"
                 for hdict, prefix in zip(
                     [pbpb_sm1_hists, pbpb_m1m1_hists, pbpb_m1m2_hists],
@@ -304,7 +304,7 @@ def energy_energy_correlator_pbpbpp(
         for gamma_pt_bin in gamma_pt_bins:
             for p_ch_T_cut in p_ch_T_cuts:
                 key = (n_exp, gamma_pt_bin[0], gamma_pt_bin[1], p_ch_T_cut)
-                hist_name = f"eec_n{n_exp}_jetpt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
+                hist_name = f"eec_n{n_exp}_gammapt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
                 hist_title = f"PP EEC n={n_exp}, gamma pT {gamma_pt_bin[0]}-{gamma_pt_bin[1]}, p_ch>{p_ch_T_cut};R_L;EEC"
                 for hdict, prefix in zip(
                     [pp_signal_hists, pp_sm1_hists, pp_m1m1_hists, pp_m1m2_hists],
@@ -317,7 +317,7 @@ def energy_energy_correlator_pbpbpp(
         for gamma_pt_bin in gamma_pt_bins:
             for p_ch_T_cut in p_ch_T_cuts:
                 key = (n_exp, gamma_pt_bin[0], gamma_pt_bin[1], p_ch_T_cut)
-                hist_name = f"eec_n{n_exp}_jetpt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
+                hist_name = f"eec_n{n_exp}_gammapt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
                 hist_title = f"PP Hadron in Jet Cone EEC n={n_exp}, gamma pT {gamma_pt_bin[0]}-{gamma_pt_bin[1]}, p_ch>{p_ch_T_cut};R_L;EEC"
                 pp_hadron_cone_hists[key] = ROOT.TH1D(f"pp_hadron_cone_{hist_name}", hist_title, n_bins, delta_r_bins)
                 pp_hadron_cone_hists[key].Sumw2()
@@ -326,7 +326,7 @@ def energy_energy_correlator_pbpbpp(
         for gamma_pt_bin in gamma_pt_bins:
             for p_ch_T_cut in p_ch_T_cuts:
                 key = (n_exp, gamma_pt_bin[0], gamma_pt_bin[1], p_ch_T_cut)
-                hist_name = f"eec_n{n_exp}_jetpt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
+                hist_name = f"eec_n{n_exp}_gammapt{gamma_pt_bin[0]}to{gamma_pt_bin[1]}_pch{p_ch_T_cut}"
                 hist_title = f"PbPb NewConRecom in Jet Cone EEC n={n_exp}, gamma pT {gamma_pt_bin[0]}-{gamma_pt_bin[1]}, p_ch>{p_ch_T_cut};R_L;EEC"
                 pbpb_newcon_cone_hists[key] = ROOT.TH1D(f"pbpb_newcon_cone_{hist_name}", hist_title, n_bins, delta_r_bins)
                 pbpb_newcon_cone_hists[key].Sumw2()
