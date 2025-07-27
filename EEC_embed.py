@@ -346,7 +346,7 @@ def energy_energy_correlator_pbpbpp(
         except:
             print(f"Error reading files for PbPb event {evt_idx}")
             continue
-        if len(current_hadjet_df) == 0 or len(gamma_df) == 0:
+        if len(current_hadjet_df) != 1 or len(gamma_df) == 0:
             print(f"Empty dataframes in PbPb event {evt_idx}")
             continue
         current_hadjet_df['phi'] = map_ang_mpitopi(np.arctan2(current_hadjet_df["py"], current_hadjet_df["px"]))
