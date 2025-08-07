@@ -1,7 +1,7 @@
 """
 This macro finds the multiplicity % cut based on the centrality % cut for 5.02TeV Pb+Pb collisions using the data given in PRL 116, 222302 (2016) for midrapidity range.
-"""
 
+"""
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
